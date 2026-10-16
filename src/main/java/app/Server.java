@@ -1,7 +1,9 @@
 package app;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.AdaptiveByteBufAllocator;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -63,6 +65,8 @@ final class Server implements AutoCloseable {
     private final Thread checkpoint;
     private int heldCount;
     private boolean drainQueued;
+    /** Один буфер на поток цикла: прямой буфер Netty копируется сюда, массив на запрос не создаётся. */
+    private byte[] scratch = new byte[4096];
     private Channel channel;
     private int port;
 
@@ -72,15 +76,24 @@ final class Server implements AutoCloseable {
         EventLoopGroup group = epoll ? new EpollEventLoopGroup(1) : new NioEventLoopGroup(1);
         Server server = new Server(group, database, secret);
         try {
-            server.channel = new ServerBootstrap()
+            // Netty 4.2 по умолчанию берёт adaptive: меньше прямой памяти, чем пул арен на число ядер.
+            ByteBufAllocator allocator = new AdaptiveByteBufAllocator(true);
+            ServerBootstrap bootstrap = new ServerBootstrap()
                     .group(group)
                     .channel(epoll ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
+                    .option(ChannelOption.ALLOCATOR, allocator)
                     .option(ChannelOption.SO_BACKLOG, 8192)
                     .option(ChannelOption.SO_REUSEADDR, true)
+                    .childOption(ChannelOption.ALLOCATOR, allocator)
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
-                    .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(64, 2048, 65_536))
-                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(32 * 1024, 64 * 1024))
+                    .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(64, 512, 32 * 1024))
+                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(32 * 1024, 64 * 1024));
+            if (epoll) {
+                // Отложенный ACK ядра не должен держать короткий ответ.
+                bootstrap.childOption(io.netty.channel.epoll.EpollChannelOption.TCP_QUICKACK, true);
+            }
+            server.channel = bootstrap
                     .childHandler(new ChannelInitializer<Channel>() {
                         @Override
                         protected void initChannel(Channel ch) {
@@ -175,12 +188,27 @@ final class Server implements AutoCloseable {
         }
     }
 
+    /**
+     * Кучевой буфер разбирается на месте.
+     * Прямой буфер один раз копируется в scratch этого потока, без нового массива на запрос.
+     */
+    private int parsePending(Conn conn) {
+        ByteBuf pending = conn.pending;
+        int n = pending.readableBytes();
+        if (pending.hasArray()) {
+            return Http.parse(pending.array(), pending.arrayOffset() + pending.readerIndex(), n, conn.incoming);
+        }
+        if (scratch.length < n) {
+            scratch = new byte[Math.max(n, scratch.length * 2)];
+        }
+        pending.getBytes(pending.readerIndex(), scratch, 0, n);
+        return Http.parse(scratch, n, conn.incoming);
+    }
+
     /** Разбирает готовые запросы соединения. Неполный запрос остаётся в буфере. */
     private void service(Conn conn) {
         while (conn.pending != null && conn.pending.isReadable() && conn.channel.isActive()) {
-            byte[] raw = new byte[conn.pending.readableBytes()];
-            conn.pending.getBytes(conn.pending.readerIndex(), raw);
-            int used = Http.parse(raw, raw.length, conn.incoming);
+            int used = parsePending(conn);
             if (used == 0) {
                 return;
             }

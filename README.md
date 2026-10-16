@@ -56,6 +56,8 @@ Tests, including the integration tests against a temporary database:
 mvn test
 ```
 
+Five-minute numbers, before and after the in-place parser, are in [RESULTS.md](RESULTS.md). A pure `java.nio` loop is started with `TRANSPORT=nio`; on this Mac the tuned Netty server was faster over five minutes.
+
 Five-minute load (separate server process, closed loop, no think time):
 
 ```bash

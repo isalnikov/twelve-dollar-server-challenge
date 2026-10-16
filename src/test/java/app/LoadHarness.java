@@ -165,7 +165,10 @@ public final class LoadHarness {
                 "-XX:+UseSerialGC",
                 "-Xms512m", "-Xmx512m", "-XX:+AlwaysPreTouch",
                 "-XX:+UseCompactObjectHeaders",
+                "-XX:+DisableExplicitGC",
                 "-XX:-UsePerfData",
+                "-Dio.netty.allocator.type=adaptive",
+                "-Dio.netty.noPreferDirect=false",
                 "-Dio.netty.leakDetection.level=disabled",
                 "-cp", classpath,
                 "app.Main");
@@ -174,6 +177,10 @@ public final class LoadHarness {
         builder.environment().put("PORT", Integer.toString(port));
         builder.environment().put("SQLITE_PATH", db.toString());
         builder.environment().put("JWT_SECRET", Tokens.SECRET);
+        String transport = System.getenv("TRANSPORT");
+        if (transport != null && !transport.isBlank()) {
+            builder.environment().put("TRANSPORT", transport);
+        }
         builder.redirectErrorStream(true);
         builder.redirectOutput(root.resolve("build/load-server.log").toFile());
         Files.createDirectories(root.resolve("build"));

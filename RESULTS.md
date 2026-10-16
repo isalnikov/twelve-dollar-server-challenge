@@ -75,3 +75,48 @@ Both had 0 errors. A single post is cheaper than the feed, which joins the autho
 ## What this does not say
 
 128 concurrent clients is the top of the ladder, not a measured maximum. At that point p95 is still about ten times under the 500 ms bar. The number of idle keep-alive users this process can hold is a different question: the slot table is sized for 65 536 and sheds above the file-descriptor ceiling, and this Mac's soft limit is far above 60 000, so the five-minute run never had to shed. A 1 vCPU droplet will not repeat the 6 475 req/s figure.
+
+## After the in-place parser
+
+The follow-up run is the same harness, the same seed and the same Mac. Two things changed. The parser no longer allocates a `byte[]` for every request: a heap buffer is scanned in place, and a direct buffer is copied once into a scratch array owned by the event-loop thread. Netty 4.2’s adaptive allocator is set explicitly (it is the 4.2 default and uses less direct memory than a pool of arenas sized for every core). The JVM flags add `-XX:+DisableExplicitGC` on top of the fixed 512 MB heap, `AlwaysPreTouch`, compact object headers (JEP 519) and Serial GC. Serial is the collector the Java 25 GC guide points at for a single processor. On Linux the accepted channel also sets `TCP_QUICKACK`; this Mac has no epoll, so that option was idle here.
+
+`mixed c=128 300s req=3012849 rps=10043 err=0,000% p50=11,73ms p95=22,35ms p99=32,70ms max=266,42ms pass`
+
+| | Before | After |
+|---|---:|---:|
+| Requests | 1 942 622 | 3 012 849 |
+| Rate | 6 475 req/s | 10 043 req/s |
+| Errors | 0% | 0% |
+| p50 | 14.48 ms | 11.73 ms |
+| p95 | 45.33 ms | 22.35 ms |
+| p99 | 123.34 ms | 32.70 ms |
+| max | 897.72 ms | 266.42 ms |
+
+Throughput is about 55% higher. p95 is about half, p99 is about a quarter. A first attempt that called `ByteBuf.getByte` once per byte was slower than the original copy, and it was thrown away. The tight loop has to run on a raw array.
+
+The same ladder, after the change:
+
+| Clients | req/s | p95 | p99 |
+|---|---:|---:|---:|
+| 1 | 2 223 | 0.81 ms | 1.28 ms |
+| 4 | 8 204 | 0.89 ms | 1.34 ms |
+| 16 | 8 992 | 3.42 ms | 5.10 ms |
+| 64 | 9 439 | 12.50 ms | 18.18 ms |
+| 128 | 9 648 | 23.93 ms | 35.80 ms |
+
+Feed only, 128 clients, 20 seconds: 6 301 req/s, p95 39.95 ms, p99 92.16 ms. One post: 13 252 req/s, p95 16.48 ms, p99 24.30 ms. Both had 0 errors.
+
+## Pure `java.nio`, same engine
+
+`TRANSPORT=nio` starts `NioServer`: one `Selector` thread, the same SQLite engine, the same group commit, no Netty. Same five-minute mix at 128 clients:
+
+`mixed c=128 300s req=2497496 rps=8325 err=0,000% p50=14,58ms p95=25,29ms p99=35,67ms max=526,27ms pass`
+
+| | Tuned Netty | java.nio |
+|---|---:|---:|
+| Rate | 10 043 req/s | 8 325 req/s |
+| p95 | 22.35 ms | 25.29 ms |
+| p99 | 32.70 ms | 35.67 ms |
+| max | 266.42 ms | 526.27 ms |
+
+One client is faster without Netty (3 308 req/s against 2 223). From four clients upward the tuned Netty loop holds a higher rate, and the five-minute tail is shorter. Replacing Netty does not buy another step on this machine. The default remains Netty.

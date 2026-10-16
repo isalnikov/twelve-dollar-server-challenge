@@ -10,7 +10,15 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         String host = env("HOST", "0.0.0.0");
         int port = Integer.parseInt(env("PORT", "80"));
-        Server server = Server.listen(host, port, Path.of(System.getenv("SQLITE_PATH")), System.getenv("JWT_SECRET"));
+        Path database = Path.of(System.getenv("SQLITE_PATH"));
+        String secret = System.getenv("JWT_SECRET");
+        if ("nio".equals(env("TRANSPORT", "netty"))) {
+            NioServer server = NioServer.listen(host, port, database, secret);
+            Runtime.getRuntime().addShutdownHook(new Thread(server::close));
+            server.block();
+            return;
+        }
+        Server server = Server.listen(host, port, database, secret);
         Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         server.block();
     }

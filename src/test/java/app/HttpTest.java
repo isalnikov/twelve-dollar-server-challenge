@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +62,30 @@ class HttpTest {
         assertEquals(rest.length, Http.parse(rest, rest.length, second));
         assertEquals("/health", second.target);
         assertFalse(second.keepAlive);
+    }
+
+    @Test
+    /** Второй запрос читается из того же буфера, хвост не копируется в новый массив. */
+    void parsesTheNextRequestFromTheSameBuffer() {
+        ByteBuf buf = Unpooled.wrappedBuffer(request("""
+                GET /feed HTTP/1.1\r
+                Host: localhost\r
+                \r
+                GET /health HTTP/1.1\r
+                \r
+                """));
+        Incoming first = new Incoming();
+        int used = Http.parse(buf, first);
+        assertEquals("GET", first.method);
+        assertEquals("/feed", first.target);
+        assertTrue(first.keepAlive);
+        assertNull(first.body);
+        buf.skipBytes(used);
+        Incoming second = new Incoming();
+        assertEquals(buf.readableBytes(), Http.parse(buf, second));
+        assertEquals("/health", second.target);
+        assertTrue(second.keepAlive);
+        buf.release();
     }
 
     private static byte[] request(String text) {
