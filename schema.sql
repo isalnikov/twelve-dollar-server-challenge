@@ -1,6 +1,7 @@
 -- Схема задания. Менять её нельзя: те же таблицы, те же индексы, те же метки времени.
--- The database every submission uses (SQLite). The schema is fixed.
--- Timestamps are TEXT in the exact wire format (YYYY-MM-DDTHH:MM:SS.mmmZ, UTC).
+-- The database every submission uses (SQLite). seed/make-seed.sh builds seed/feed.db from it.
+-- The schema is fixed: submissions may not add or change tables, columns, indexes or triggers.
+-- Timestamps are TEXT in the exact wire format (YYYY-MM-DDTHH:MM:SS.mmmZ, UTC), which also sorts correctly.
 CREATE TABLE users (
   id          INTEGER PRIMARY KEY,
   username    TEXT NOT NULL UNIQUE,

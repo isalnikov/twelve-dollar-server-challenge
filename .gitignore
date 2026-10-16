@@ -1,5 +1,4 @@
 target/
-.DS_Store
 native/
 build/
 *.db
@@ -7,3 +6,8 @@ build/
 *.db-shm
 .idea/
 *.iml
+.DS_Store
+seed/feed.db*
+seed/tokens.json
+seed/tsv/
+results/
