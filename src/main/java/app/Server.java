@@ -90,8 +90,7 @@ final class Server implements AutoCloseable {
                     .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(64, 512, 32 * 1024))
                     .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(32 * 1024, 64 * 1024));
             if (epoll) {
-                // Отложенный ACK ядра не должен держать короткий ответ.
-                bootstrap.childOption(io.netty.channel.epoll.EpollChannelOption.TCP_QUICKACK, true);
+                linuxEpoll(bootstrap);
             }
             server.channel = bootstrap
                     .childHandler(new ChannelInitializer<Channel>() {
@@ -348,6 +347,18 @@ final class Server implements AutoCloseable {
             value /= 10;
         }
         buf.writeBytes(tmp, i, tmp.length - i);
+    }
+
+    /**
+     * Опции только для нативного epoll. На macOS этот метод не вызывается.
+     * EPOLL_MODE в Netty 4.2 не переключается: setEpollMode ничего не делает.
+     * SO_BUSY_POLL и TCP_CORK не ставим: на одном vCPU они забирают ядро и задерживают короткий ответ.
+     */
+    private static void linuxEpoll(ServerBootstrap bootstrap) {
+        // Ядро само сбрасывает quickack; на старте соединения отложенный ACK всё равно не нужен.
+        bootstrap.childOption(io.netty.channel.epoll.EpollChannelOption.TCP_QUICKACK, true);
+        // Сокет считается готовым к записи, пока в ядре не лежит больше 32 КБ. Это порог нашей watermark.
+        bootstrap.childOption(io.netty.channel.epoll.EpollChannelOption.TCP_NOTSENT_LOWAT, 32L * 1024);
     }
 
     /** На macOS класса epoll нет в classpath или он недоступен. Тогда остаётся NIO. */

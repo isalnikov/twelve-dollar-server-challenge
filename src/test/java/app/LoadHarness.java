@@ -177,6 +177,9 @@ public final class LoadHarness {
         builder.environment().put("PORT", Integer.toString(port));
         builder.environment().put("SQLITE_PATH", db.toString());
         builder.environment().put("JWT_SECRET", Tokens.SECRET);
+        if (System.getProperty("os.name", "").toLowerCase().contains("linux")) {
+            builder.environment().put("MALLOC_ARENA_MAX", "2");
+        }
         String transport = System.getenv("TRANSPORT");
         if (transport != null && !transport.isBlank()) {
             builder.environment().put("TRANSPORT", transport);

@@ -24,3 +24,13 @@ if ! command -v mvn >/dev/null; then
   rm -f "$tmp"
   ln -sfn /opt/apache-maven-3.9.12/bin/mvn /usr/local/bin/mvn
 fi
+# Backlog сокета 8192. Без somaxconn ядро обрежет очередь.
+# tcp_slow_start_after_idle=0 не сбрасывает окно после паузы клиента в задании (3–15 с).
+cat >/etc/sysctl.d/99-twelve-dollar.conf <<'EOF'
+net.core.somaxconn = 8192
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.netdev_max_backlog = 8192
+net.ipv4.tcp_slow_start_after_idle = 0
+EOF
+sysctl --system >/dev/null
+printf '* soft nofile 65535\n* hard nofile 65535\n' >/etc/security/limits.d/99-twelve-dollar.conf
