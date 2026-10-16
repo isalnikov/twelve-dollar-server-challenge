@@ -121,32 +121,60 @@ Feed only, 128 clients, 20 seconds: 6 301 req/s, p95 39.95 ms, p99 92.16 ms. One
 
 One client is faster without Netty (3 308 req/s against 2 223). From four clients upward the tuned Netty loop holds a higher rate, and the five-minute tail is shorter. Replacing Netty does not buy another step on this machine. The default remains Netty.
 
-## Feed SQL: grouped likes (shipped)
+## Feed SQL: what changed (before / after)
 
-The feed used twenty correlated `count(*)` subqueries inside `json_object`, one per row, plus twenty-one `sqlite3_step` calls and Java concatenation. Alternatives were tried on the same seed (2k users, 20k posts, 80k likes):
+Everything above is still the in-place HTTP parser and tuned Netty/JVM flags. The next change is **only** how `/feed` loads like counts from SQLite.
 
-| Variant | Micro-benchmark (3k feeds) | Notes |
+**Before**
+
+- One `SELECT` returned twenty rows. Each row’s `json_object` held a **correlated** subquery: `(SELECT count(*) FROM likes l WHERE l.post_id = p.id)`.
+- Java called `sqlite3_step` up to twenty-one times and glued `{"posts":[` … `]}` in a `ByteArrayOutputStream`.
+
+**After (shipped)**
+
+- The same twenty rows and the same JSON key order (`id`, `body`, `created_at`, `author`, `like_count`).
+- Likes for the feed are counted **once**: `GROUP BY post_id` over `likes` where `post_id IN (SELECT id FROM posts ORDER BY created_at DESC, id DESC LIMIT 20)`, then `LEFT JOIN` back to the top twenty posts.
+- Java still loops over rows and builds the outer `{"posts":[...]}`; only the SQL plan changed. `GET /posts/:id` still uses one correlated `count(*)` per post.
+
+**Variants tried on the same seed (2k users, 20k posts, 80k likes)**
+
+| Variant | Micro-benchmark (3k feeds) | Outcome |
 |---|---:|---|
-| Correlated `count(*)` per row | ~211 µs | Original |
-| `json_group_array` + CTE, one `step` | ~2 077 µs | Rejected |
+| Correlated `count(*)` per row | ~211 µs | Before |
+| `json_group_array` + CTE, one `step` | ~2 077 µs | Rejected (~10× slower) |
 | CTE + row loop, `GROUP BY` likes | ~2 029 µs | Rejected |
 | `IN (top 20 ids)` + `GROUP BY` likes, row loop | ~204 µs | **Shipped** |
 
-The shipped query counts likes only for the twenty newest post ids, then joins back to the feed rows. Single-post reads still use one correlated count.
+JEP 520 (`TIMING=1`, one minute mixed at 128 clients, recording overhead): `Db.feed()` average **0.111 ms → 0.070 ms**; see `PROFILE.md`.
 
-JEP 520 (`TIMING=1`, one minute mixed at 128 clients, recording overhead): `Db.feed()` average **0.111 ms → 0.070 ms**, mixed **7 559 → 11 937 req/s** on the same Mac session as the profile work.
+**Noisy reruns on a loaded Mac** (same code, `bash load.sh`): **6 394** and **2 517** req/s on the five-minute mix — background CPU load, not a slower query. After clearing load, the run below landed above the pre-change **10 043** req/s figure.
 
-Final harness run without JFR (`bash load.sh`, 2026-10-16, same Mac, log `build/final-load-2.log`):
+## Five-minute hold after feed SQL (clean machine)
 
-`mixed c=128 300s req=1918440 rps=6394 err=0,000% p50=17,43ms p95=38,03ms p99=61,92ms max=510,74ms pass`
+`bash load.sh`, 2026-10-16, MacBook Pro 15,2, Temurin 25, log `build/clean-load.log`, no JFR:
+
+`mixed c=128 300s req=3203227 rps=10677 err=0,000% p50=10,64ms p95=22,56ms p99=33,58ms max=242,75ms pass`
+
+| | After in-place parser only | After feed SQL (this run) |
+|---|---:|---:|
+| Requests (300 s) | 3 012 849 | 3 203 227 |
+| Rate | 10 043 req/s | **10 677 req/s** |
+| p50 | 11.73 ms | **10.64 ms** |
+| p95 | 22.35 ms | 22.56 ms |
+| p99 | 32.70 ms | 33.58 ms |
+| max | 266.42 ms | **242.75 ms** |
+| Errors | 0% | 0% |
+
+Short ladder (10 s probes), same run:
 
 | Clients | req/s | p95 | p99 |
 |---:|---:|---:|---:|
-| 1 | 4 231 | 0.46 ms | 0.82 ms |
-| 8 | 3 773 | 4.56 ms | 9.30 ms |
-| 64 | 5 115 | 24.81 ms | 41.93 ms |
-| 128 | 6 513 | 35.42 ms | 55.44 ms |
+| 1 | 2 997 | 0.64 ms | 0.89 ms |
+| 2 | 6 945 | 0.48 ms | 0.65 ms |
+| 16 | 6 953 | 4.50 ms | 6.34 ms |
+| 32 | 8 126 | 7.07 ms | 9.91 ms |
+| 128 | 7 346 | 27.99 ms | 38.31 ms |
 
-Feed only, 128 clients, ~20 s: 1 548 req/s, p95 399.55 ms. One post: 4 771 req/s, p95 56.00 ms. Both had 0 errors.
+Feed only, 128 clients, 20 s: **6 475** req/s, p95 **32.98** ms, p99 45.69 ms (was 6 301 / 39.95 / 92.16 after the parser). One post: **11 718** req/s, p95 18.28 ms, p99 29.34 ms (was 13 252 / 16.48 / 24.30). Both had 0 errors.
 
-That five-minute figure is below the **10 043 req/s** run recorded after the in-place parser on a quieter pass of the same machine. Treat **10 043 req/s** as the best verified mixed hold on this laptop; treat the feed change as a correctness-preserving SQL win backed by method timing, not as a guaranteed +58% on every rerun. Reproduce profiling with `TIMING=1 bash load.sh` and `jfr view method-timing build/method-timing.jfr` (see `PROFILE.md`).
+**Best verified mixed hold on this laptop: 10 677 req/s** with the feed SQL above. Reproduce profiling with `TIMING=1 bash load.sh` and `jfr view method-timing build/method-timing.jfr`.
