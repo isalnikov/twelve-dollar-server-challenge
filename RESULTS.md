@@ -120,3 +120,33 @@ Feed only, 128 clients, 20 seconds: 6 301 req/s, p95 39.95 ms, p99 92.16 ms. One
 | max | 266.42 ms | 526.27 ms |
 
 One client is faster without Netty (3 308 req/s against 2 223). From four clients upward the tuned Netty loop holds a higher rate, and the five-minute tail is shorter. Replacing Netty does not buy another step on this machine. The default remains Netty.
+
+## Feed SQL: grouped likes (shipped)
+
+The feed used twenty correlated `count(*)` subqueries inside `json_object`, one per row, plus twenty-one `sqlite3_step` calls and Java concatenation. Alternatives were tried on the same seed (2k users, 20k posts, 80k likes):
+
+| Variant | Micro-benchmark (3k feeds) | Notes |
+|---|---:|---|
+| Correlated `count(*)` per row | ~211 µs | Original |
+| `json_group_array` + CTE, one `step` | ~2 077 µs | Rejected |
+| CTE + row loop, `GROUP BY` likes | ~2 029 µs | Rejected |
+| `IN (top 20 ids)` + `GROUP BY` likes, row loop | ~204 µs | **Shipped** |
+
+The shipped query counts likes only for the twenty newest post ids, then joins back to the feed rows. Single-post reads still use one correlated count.
+
+JEP 520 (`TIMING=1`, one minute mixed at 128 clients, recording overhead): `Db.feed()` average **0.111 ms → 0.070 ms**, mixed **7 559 → 11 937 req/s** on the same Mac session as the profile work.
+
+Final harness run without JFR (`bash load.sh`, 2026-10-16, same Mac, log `build/final-load-2.log`):
+
+`mixed c=128 300s req=1918440 rps=6394 err=0,000% p50=17,43ms p95=38,03ms p99=61,92ms max=510,74ms pass`
+
+| Clients | req/s | p95 | p99 |
+|---:|---:|---:|---:|
+| 1 | 4 231 | 0.46 ms | 0.82 ms |
+| 8 | 3 773 | 4.56 ms | 9.30 ms |
+| 64 | 5 115 | 24.81 ms | 41.93 ms |
+| 128 | 6 513 | 35.42 ms | 55.44 ms |
+
+Feed only, 128 clients, ~20 s: 1 548 req/s, p95 399.55 ms. One post: 4 771 req/s, p95 56.00 ms. Both had 0 errors.
+
+That five-minute figure is below the **10 043 req/s** run recorded after the in-place parser on a quieter pass of the same machine. Treat **10 043 req/s** as the best verified mixed hold on this laptop; treat the feed change as a correctness-preserving SQL win backed by method timing, not as a guaranteed +58% on every rerun. Reproduce profiling with `TIMING=1 bash load.sh` and `jfr view method-timing build/method-timing.jfr` (see `PROFILE.md`).

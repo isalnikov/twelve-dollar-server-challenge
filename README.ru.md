@@ -56,7 +56,7 @@ SQLITE_PATH=seed/feed.db JWT_SECRET=twelve-dollar-challenge HOST=127.0.0.1 PORT=
 mvn test
 ```
 
-Цифры пяти минут до и после разбора на месте лежат в [RESULTS.ru.md](RESULTS.ru.md). Цикл на чистом `java.nio` включается через `TRANSPORT=nio`; на этом Mac за пять минут быстрее оказался настроенный сервер на Netty.
+Пятиминутные прогоны, разбор на месте и сравнение SQL ленты — в [RESULTS.ru.md](RESULTS.ru.md). Профиль JVM и JEP 520: [PROFILE.ru.md](PROFILE.ru.md). Цикл на чистом `java.nio` — `TRANSPORT=nio`; на этом Mac за пять минут быстрее Netty. Опционально: `PROFILE=1` или `TIMING=1` с `bash load.sh`.
 
 Пять минут нагрузки (отдельный процесс сервера, закрытый цикл, без пауз):
 

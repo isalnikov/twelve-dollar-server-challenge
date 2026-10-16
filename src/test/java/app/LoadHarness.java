@@ -30,6 +30,27 @@ public final class LoadHarness {
     private static final long EXP = (System.currentTimeMillis() / 1000L) + 3_600;
     private static final int[] LADDER = {1, 2, 4, 8, 16, 32, 64, 128};
 
+    /**
+     * JEP 520. Время включает вызовы внутри метода. Внутренние step и call не инструментируются:
+     * иначе таймер стоит на каждом sqlite3_step и раздувает ленту. Точка с запятой разделяет фильтры.
+     */
+    private static final String METHOD_TIMING = String.join(";",
+            "app.Engine::handle",
+            "app.Db::feed",
+            "app.Db::post",
+            "app.Db::insert",
+            "app.Db::like",
+            "app.Db::postExists",
+            "app.Db::begin",
+            "app.Db::commit",
+            "app.Db::checkpoint",
+            "app.Http::parse",
+            "app.Jwt::authenticate",
+            "app.Server::drain",
+            "app.Server::send",
+            "app.Server::flushHeld",
+            "app.Server::frame");
+
     /** Прогрев, лестница до 128, затем лента, пост и пять минут смеси. */
     public static void main(String[] args) throws Exception {
         Path root = Path.of("").toAbsolutePath();
@@ -49,6 +70,17 @@ public final class LoadHarness {
             System.out.println("server pid=" + server.pid() + " port=" + port
                     + " processors=" + Runtime.getRuntime().availableProcessors());
             run(base, "warmup", 2, Duration.ofSeconds(5));
+            if ("1".equals(System.getenv("TIMING"))) {
+                int seconds = 60;
+                String configured = System.getenv("TIMING_SECONDS");
+                if (configured != null && !configured.isBlank()) {
+                    seconds = Integer.parseInt(configured);
+                }
+                run(base, "warmup", 128, Duration.ofSeconds(15));
+                Report timed = run(base, "mixed", 128, Duration.ofSeconds(seconds));
+                System.out.println(timed.passes() ? "TIMING_WINDOW PASS" : "TIMING_WINDOW FAIL");
+                return;
+            }
             int holdAt = 1;
             for (int concurrency : LADDER) {
                 Report report = run(base, "probe", concurrency, Duration.ofSeconds(10));
@@ -159,19 +191,30 @@ public final class LoadHarness {
 
     private static Process startServer(Path root, String classpath, Path db, int port) throws Exception {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-        ProcessBuilder builder = new ProcessBuilder(
-                java,
-                "--enable-native-access=ALL-UNNAMED",
-                "-XX:+UseSerialGC",
-                "-Xms512m", "-Xmx512m", "-XX:+AlwaysPreTouch",
-                "-XX:+UseCompactObjectHeaders",
-                "-XX:+DisableExplicitGC",
-                "-XX:-UsePerfData",
-                "-Dio.netty.allocator.type=adaptive",
-                "-Dio.netty.noPreferDirect=false",
-                "-Dio.netty.leakDetection.level=disabled",
-                "-cp", classpath,
-                "app.Main");
+        List<String> command = new ArrayList<>();
+        command.add(java);
+        command.add("--enable-native-access=ALL-UNNAMED");
+        command.add("-XX:+UseSerialGC");
+        command.add("-Xms512m");
+        command.add("-Xmx512m");
+        command.add("-XX:+AlwaysPreTouch");
+        command.add("-XX:+UseCompactObjectHeaders");
+        command.add("-XX:+DisableExplicitGC");
+        command.add("-XX:-UsePerfData");
+        command.add("-Dio.netty.allocator.type=adaptive");
+        command.add("-Dio.netty.noPreferDirect=false");
+        command.add("-Dio.netty.leakDetection.level=disabled");
+        if ("1".equals(System.getenv("PROFILE"))) {
+            command.add("-XX:StartFlightRecording=filename=build/server.jfr,dumponexit=true,settings=profile,maxsize=256m");
+        }
+        if ("1".equals(System.getenv("TIMING"))) {
+            command.add("-XX:StartFlightRecording=filename=build/method-timing.jfr,dumponexit=true,delay=21s,settings=default,method-timing="
+                    + METHOD_TIMING);
+        }
+        command.add("-cp");
+        command.add(classpath);
+        command.add("app.Main");
+        ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(root.toFile());
         builder.environment().put("HOST", "127.0.0.1");
         builder.environment().put("PORT", Integer.toString(port));

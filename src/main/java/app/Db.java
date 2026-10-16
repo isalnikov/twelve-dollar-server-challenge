@@ -54,8 +54,25 @@ final class Db implements AutoCloseable {
     }
 
     /** Порядок ключей поста фиксирован заданием: id, body, created_at, author, like_count. */
-    private static final String OBJECT = """
+    private static final String POST_JSON = """
             json_object('id', p.id, 'body', p.body, 'created_at', p.created_at, 'author', u.username, 'like_count', (SELECT count(*) FROM likes l WHERE l.post_id = p.id))""";
+
+    /**
+     * Лента: топ-20 постов, лайки одним GROUP BY по id из подзапроса.
+     * Один json_group_array на всю ленту на этой базе оказался в ~10 раз медленнее цикла step.
+     */
+    private static final String FEED_SQL = """
+            SELECT json_object('id', p.id, 'body', p.body, 'created_at', p.created_at, 'author', u.username, 'like_count', COALESCE(lc.cnt, 0))
+            FROM posts p
+            JOIN users u ON u.id = p.user_id
+            LEFT JOIN (
+              SELECT post_id, COUNT(*) AS cnt
+              FROM likes
+              WHERE post_id IN (SELECT id FROM posts ORDER BY created_at DESC, id DESC LIMIT 20)
+              GROUP BY post_id
+            ) lc ON lc.post_id = p.id
+            ORDER BY p.created_at DESC, p.id DESC
+            LIMIT 20""";
 
     private final Arena arena = Arena.ofShared();
     private final MemorySegment scratch = arena.allocate(4096);
@@ -91,8 +108,8 @@ final class Db implements AutoCloseable {
             exec("PRAGMA cache_size=-32768");
             exec("PRAGMA temp_store=MEMORY");
             exec("PRAGMA wal_autocheckpoint=0");
-            feedStmt = prepare("SELECT " + OBJECT + " FROM posts p JOIN users u ON u.id = p.user_id ORDER BY p.created_at DESC, p.id DESC LIMIT 20");
-            postStmt = prepare("SELECT " + OBJECT + " FROM posts p JOIN users u ON u.id = p.user_id WHERE p.id=?");
+            feedStmt = prepare(FEED_SQL);
+            postStmt = prepare("SELECT " + POST_JSON + " FROM posts p JOIN users u ON u.id = p.user_id WHERE p.id=?");
             insertStmt = prepare("INSERT INTO posts (user_id, body) VALUES (?1, ?2) RETURNING id, created_at");
             likeStmt = prepare("""
                     INSERT INTO likes (user_id, post_id)
@@ -105,7 +122,7 @@ final class Db implements AutoCloseable {
         }
     }
 
-    /** Двадцать свежих постов одним JSON {"posts":[...]} через json_object. */
+    /** Двадцать свежих постов одним JSON {"posts":[...]}; по строке — {@link #FEED_SQL}. */
     byte[] feed() {
         byte[] open = "{\"posts\":[".getBytes(StandardCharsets.US_ASCII);
         byte[] close = "]}".getBytes(StandardCharsets.US_ASCII);
