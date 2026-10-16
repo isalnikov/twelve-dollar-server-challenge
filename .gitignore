@@ -1,0 +1,9 @@
+target/
+.DS_Store
+native/
+build/
+*.db
+*.db-wal
+*.db-shm
+.idea/
+*.iml
