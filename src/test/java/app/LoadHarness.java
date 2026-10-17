@@ -16,6 +16,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -64,11 +65,20 @@ public final class LoadHarness {
             port = socket.getLocalPort();
         }
         Process server = startServer(root, classpath, db, port);
+        AtomicLong peakRssKb = new AtomicLong();
+        Thread rssSampler = startRssSampler(server, peakRssKb);
         try {
             String base = "http://127.0.0.1:" + port;
             waitUntilHealthy(base, server);
-            System.out.println("server pid=" + server.pid() + " port=" + port
+            String mode = "1".equals(System.getenv("NATIVE")) ? "native" : "jvm";
+            System.out.println("server mode=" + mode + " pid=" + server.pid() + " port=" + port
                     + " processors=" + Runtime.getRuntime().availableProcessors());
+            if ("1".equals(System.getenv("ONLY_MIXED"))) {
+                run(base, "warmup", 128, Duration.ofSeconds(15));
+                Report hold = run(base, "mixed", 128, Duration.ofMinutes(5));
+                System.out.println(hold.passes() ? "FIVE_MINUTE PASS" : "FIVE_MINUTE FAIL");
+                return;
+            }
             run(base, "warmup", 2, Duration.ofSeconds(5));
             if ("1".equals(System.getenv("TIMING"))) {
                 int seconds = 60;
@@ -101,7 +111,56 @@ public final class LoadHarness {
             if (!server.waitFor(5, TimeUnit.SECONDS)) {
                 server.destroyForcibly();
             }
+            if (rssSampler != null) {
+                rssSampler.interrupt();
+                try {
+                    rssSampler.join(2_000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (peakRssKb.get() > 0) {
+                System.out.println("peak_rss_mb=" + String.format(java.util.Locale.ROOT, "%.1f", peakRssKb.get() / 1024.0));
+            }
         }
+    }
+
+    /** Раз в секунду снимает RSS дочернего сервера (macOS/Linux ps). */
+    private static Thread startRssSampler(Process server, AtomicLong peakKb) {
+        if (!"1".equals(System.getenv("MEM_SAMPLE"))) {
+            return null;
+        }
+        Thread thread = new Thread(() -> {
+            while (!server.isAlive()) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            long pid = server.pid();
+            while (server.isAlive()) {
+                try {
+                    Process probe = new ProcessBuilder("ps", "-o", "rss=", "-p", Long.toString(pid))
+                            .redirectError(ProcessBuilder.Redirect.DISCARD)
+                            .start();
+                    String line = new String(probe.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).trim();
+                    probe.waitFor();
+                    if (!line.isEmpty()) {
+                        long kb = Long.parseLong(line.split("\\s+")[0]);
+                        peakKb.accumulateAndGet(kb, Math::max);
+                    }
+                    Thread.sleep(1_000);
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Exception ignored) {
+                    // ps может мигнуть между destroy и exit
+                }
+            }
+        }, "rss-sampler");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
     }
 
     /** concurrency виртуальных потоков бьют в сервер до конца окна и печатают процентили. */
@@ -190,6 +249,32 @@ public final class LoadHarness {
     }
 
     private static Process startServer(Path root, String classpath, Path db, int port) throws Exception {
+        if ("1".equals(System.getenv("NATIVE"))) {
+            String configured = System.getenv("NATIVE_SERVER");
+            Path binary = configured == null || configured.isBlank()
+                    ? root.resolve("target/twelve-dollar-server")
+                    : Path.of(configured);
+            if (!Files.isExecutable(binary)) {
+                throw new IllegalStateException("native binary missing: run bash native-build.sh");
+            }
+            ProcessBuilder builder = new ProcessBuilder(binary.toAbsolutePath().toString());
+            builder.directory(root.toFile());
+            builder.environment().put("HOST", "127.0.0.1");
+            builder.environment().put("PORT", Integer.toString(port));
+            builder.environment().put("SQLITE_PATH", db.toString());
+            builder.environment().put("JWT_SECRET", Tokens.SECRET);
+            if (System.getProperty("os.name", "").toLowerCase().contains("linux")) {
+                builder.environment().put("MALLOC_ARENA_MAX", "2");
+            }
+            String transport = System.getenv("TRANSPORT");
+            if (transport != null && !transport.isBlank()) {
+                builder.environment().put("TRANSPORT", transport);
+            }
+            builder.redirectErrorStream(true);
+            builder.redirectOutput(root.resolve("build/load-server.log").toFile());
+            Files.createDirectories(root.resolve("build"));
+            return builder.start();
+        }
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         List<String> command = new ArrayList<>();
         command.add(java);

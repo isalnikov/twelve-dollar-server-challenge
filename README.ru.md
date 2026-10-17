@@ -56,7 +56,7 @@ SQLITE_PATH=seed/feed.db JWT_SECRET=twelve-dollar-challenge HOST=127.0.0.1 PORT=
 mvn test
 ```
 
-Пятиминутные прогоны, разбор на месте и сравнение SQL ленты — в [RESULTS.ru.md](RESULTS.ru.md). Профиль JVM и JEP 520: [PROFILE.ru.md](PROFILE.ru.md). Цикл на чистом `java.nio` — `TRANSPORT=nio`; на этом Mac за пять минут быстрее Netty. Опционально: `PROFILE=1` или `TIMING=1` с `bash load.sh`.
+Пятиминутные прогоны, разбор на месте и сравнение SQL ленты — в [RESULTS.ru.md](RESULTS.ru.md). Профиль JVM и JEP 520: [PROFILE.ru.md](PROFILE.ru.md). Цикл на чистом `java.nio` — `TRANSPORT=nio`; на этом Mac за пять минут быстрее Netty. Опционально: `PROFILE=1` или `TIMING=1` с `bash load.sh`. Нативный бинарник GraalVM: `bash native-build.sh` — см. [NATIVE.ru.md](NATIVE.ru.md).
 
 Пять минут нагрузки (отдельный процесс сервера, закрытый цикл, без пауз):
 

@@ -56,7 +56,7 @@ Tests, including the integration tests against a temporary database:
 mvn test
 ```
 
-Five-minute numbers, the in-place parser, and the feed SQL comparison are in [RESULTS.md](RESULTS.md). JVM profiling and JEP 520 method timing: [PROFILE.md](PROFILE.md). A pure `java.nio` loop is started with `TRANSPORT=nio`; on this Mac the tuned Netty server was faster over five minutes. Optional load profiling: `PROFILE=1` or `TIMING=1` with `bash load.sh`.
+Five-minute numbers, the in-place parser, and the feed SQL comparison are in [RESULTS.md](RESULTS.md). JVM profiling and JEP 520 method timing: [PROFILE.md](PROFILE.md). A pure `java.nio` loop is started with `TRANSPORT=nio`; on this Mac the tuned Netty server was faster over five minutes. Optional load profiling: `PROFILE=1` or `TIMING=1` with `bash load.sh`. GraalVM native executable: `bash native-build.sh` — see [NATIVE.md](NATIVE.md) for throughput vs memory.
 
 Five-minute load (separate server process, closed loop, no think time):
 

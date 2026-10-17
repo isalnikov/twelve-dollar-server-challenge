@@ -1,0 +1,59 @@
+{
+  "resources": [
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/nfc.nrm"
+    },
+    {
+      "module": "java.base",
+      "glob": "sun/launcher/resources/launcher_ru.properties"
+    },
+    {
+      "module": "java.base",
+      "glob": "sun/launcher/resources/launcher_ru_RU.properties"
+    },
+    {
+      "bundle": "sun.launcher.resources.launcher"
+    }
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "long", "int", "long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "long", "long", "long", "long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "long", "int", "long", "long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "int", "long", "int", "long"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "int", "long"]
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": ["long", "int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["long", "int"]
+      },
+      {
+        "returnType": "long",
+        "parameterTypes": ["long"]
+      }
+    ]
+  }
+}
